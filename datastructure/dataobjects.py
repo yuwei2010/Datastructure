@@ -18,6 +18,7 @@ import json
 import warnings
 import scipy.io
 
+
 from xml.etree.ElementTree import fromstring
 
 from pathlib import Path
@@ -136,13 +137,13 @@ def translate_config(newconfig=None):
                         
                         if isinstance(v, str):
                         
-                            res.columns = res.columns.str.replace(v, k)
+                            res.columns = res.columns.str.replace(v, k, regex=False)
                             
                         elif isinstance(v, (list, tuple, set)):
                             
                             for vv in v:
                                 
-                                res.columns = res.columns.str.replace(vv, k)
+                                res.columns = res.columns.str.replace(vv, k, regex=False)
 
                 return res
             
@@ -556,42 +557,54 @@ class Data_Interface(object):
         
         return out
     
-    def to_csv(self, name=None):
+    def to_csv(self, name=None, overwrite=True):
         
         if name is None:
             
             name = self.name + '.csv'
             
-        self.df.to_csv(name)
+        if overwrite or not Path(name).is_file():
+            
+            self.df.to_csv(name)
         
         return self
 
-    def to_excel(self, name=None):
+    def to_excel(self, name=None, overwrite=True):
         
         if name is None:
             
             name = self.name + '.xlsx'
-            
-        self.df.to_excel(name)
+        
+        if overwrite or not Path(name).is_file():
+            self.df.to_excel(name)
         
         return self
     
-    def save(self, path=None):
+    def save(self, name, overwrite=True):
         
-        dobj = DATA_OBJECT(path=self.path, config=self.config, name=self.name, 
+        if overwrite or not Path(name).is_file():
+        
+            dobj = DATA_OBJECT(path=self.path, config=self.config, name=self.name, 
                            comment=self.comment, df=self.df)
-        
-        dobj.save(path)
+            dobj.save(name)
         
         return self
     
-    def close(self):
+
+        
+        
+        
+    def close(self, clean=True):
 
         if hasattr(self, '_fhandler') and hasattr(self._fhandler, 'close'):
             
             self._fhandler.close()  
             
             del self._fhandler
+            
+        if clean and hasattr(self, '_df'):
+            
+            del self._df
 
 #%% DATA_OBJECT
 class DATA_OBJECT(Data_Interface):
@@ -609,7 +622,11 @@ class DATA_OBJECT(Data_Interface):
         else:
             super().__init__(path, config=config, name=name, comment=comment)
             self._df = df
+            
+    @property   
+    def t(self):
         
+        return np.asarray(self.df.index)        
     
     def save(self, name=None):
                 
@@ -624,6 +641,7 @@ class DATA_OBJECT(Data_Interface):
     def load(self, path):
         
         with np.load(path, allow_pickle=True) as dat:
+            
             dat = np.load(path, allow_pickle=True)
             df = pd.DataFrame(dat['df'], index=dat['index'], columns=dat['columns'])
             
@@ -645,7 +663,7 @@ class PANDAS_OBJECT(Data_Interface):
             '.xlsx': pd.read_excel,
             }
     
-    def __init__(self, path=None, config=None, name=None, comment=None, df=None):
+    def __init__(self, path=None, config=None, name=None, comment=None):
         
         super().__init__(path, config=config, name=name, comment=comment)
         
@@ -1026,9 +1044,7 @@ class MDF_OBJECT(Data_Interface):
         return pd.concat(outs, axis=1)
     
     def get_df(self):
-        
-
-        
+                
         if self.config is None:
             
             df = pd.DataFrame()
@@ -1057,16 +1073,14 @@ class MDF_OBJECT(Data_Interface):
             else:
                 
                 res = pd.DataFrame(self.t, index=self.t, columns= ['time'])
-        
-                
+                        
         else:
             
             res = self.get_channels(*names)
             
-            #self._df = pd.concat([self.df, res], axis=0)
-        
-                        
-        return res      
+        return res  
+
+  
     
 #%% MATLAB_OJBECT
 
@@ -1099,8 +1113,6 @@ class MATLAB_OBJECT(Data_Interface):
                     raise ValueError('Can not find data area')
                     
         return self._fhandler   
-        
-
     
     @property
     def t(self):
@@ -1129,11 +1141,243 @@ class MATLAB_OBJECT(Data_Interface):
         
             
         return df
+
+#%% AMERES_OJBECT
+class AMERES_OBJECT(Data_Interface):
+
+    def __init__(self, path=None, config=None, name=None, comment=None):
+        
+        if name is None:
+            
+            name = Path(path).stem[:-1]
+        
+        super().__init__(path, config=config, name=name, comment=comment)  
+        
+    @property
+    def params(self):
+        
+        fparam = self.path.parent / (self.path.stem+'.ssf')
+        out = dict()
+        
+        with open(fparam, 'r') as fobj:
+            
+            lines = fobj.readlines()
+        
+        for idx, l in enumerate(lines, start=1):
+            
+            item = dict()
+            l = l.strip()
+            
+            try:
+                
+                raw, = re.findall(r'Data_Path=\S+', l)
+                l = l.replace(raw, '').strip()
+                s, = re.findall(r'Data_Path=(.+)', raw)    
+                item['Data_Path'] = s
+                
+                raw, = re.findall(r'Param_Id=\S+', l)
+                l = l.replace(raw, '').strip()
+                s, = re.findall(r'Param_Id=(.+)', raw)                    
+                item['Param_Id'] = s
+
+            except ValueError:
+                continue
+            
+            try:
+                
+                raw, = re.findall(r'\[\S+\]', l)
+                l = l.replace(raw, '').strip()
+                s, = re.findall(r'\[(\S+)\]', raw)                    
+                item['Unit'] = s  
+                
+            except ValueError:
+                item['Unit'] = '-' 
+            
+            raw, = re.findall(r'^[01]+\s+\S+\s+\S+\s+\S+', l)
+            l = l.replace(raw, '').strip()
+            s, = re.findall(r'^[01]+\s+(\S+\s+\S+\s+\S+)', raw)    
+            item['Label'] = s
+            item['Description'] = l   
+            item['Row_Index'] = idx
+            
+            out[item['Data_Path']] = item                
+            
+        return out
     
+    @property
+    def t(self):
+        
+        if not len(self.df) and self.config is None:
+            
+            t = self.get_results(rows=[0])
+            
+        else:
+            
+            t = self.df.index
+            
+        return np.asarray(t)    
+
+    @property
+    def channels(self):
+        
+        return sorted(v['Data_Path'] for v in self.params.values())
+
+
+    @translate_config()
+    @extract_channels()
+    def get_channels(self, *channels):
+        
+        params = self.params
+        
+        row_indices = [params[c]['Row_Index'] for c in channels]
+        
+        array = self.get_results(rows=row_indices)
+        
+        df = pd.DataFrame(dict(zip(channels, array[1:])))
+        df.index = array[0]
+        
+        df.index.name = 'time'
+        
+        return df 
+
+    def get_df(self):
+
+        
+        if self.config is None:
+            
+            df = pd.DataFrame()
+        
+        else:
+            
+            df = self.get_channels(*self.config.keys())
+
+        return df
     
+    def get(self, *names):
+        
+        if all(na in self.df.keys() for na in names):
+            
+            res = super().get(*names)
+            
+        elif len(names) == 1 and (names[0].lower() == 't' 
+                                  or names[0].lower() == 'time' 
+                                  or names[0].lower() == 'index'):
+            
+            if names[0] in self.df.keys():
+                
+                res = self.df[names]
+                
+            else:
+                
+                res = pd.DataFrame(self.t, index=self.t, columns= ['time'])
+                        
+        else:
+            
+            res = self.get_channels(*names)
+                                               
+        return res
+
+    def get_results(self, rows=None):
+        
+        with open(self.path, "rb") as fobj:
+        
+            narray, = np.fromfile(fobj, dtype=np.dtype('i'), count=1)
+            nvar, = abs(np.fromfile(fobj, dtype=np.dtype('i'), count=1))
+            _ = np.hstack([[0], np.fromfile(fobj, dtype=np.dtype('i'), count=nvar)+1])                        
+            nvar = nvar + 1
+            array = np.fromfile(fobj, dtype=np.dtype('d'), count=narray*nvar)
+            array = array.reshape(narray, nvar).T
+                
+        array = (array if rows is None 
+                 else array[np.concatenate([[0], np.asarray(rows, dtype=int).ravel()])])
+        
+        return array
+    
+    def keys(self):
+        
+        if not len(self.df):
+            
+            res = self.channels
+            
+        else:
+            
+            res = list(self.df.keys())
+        
+        return res   
+    
+    def search_channel(self, patt):
+        
+        r = re.compile(patt)
+        
+        return list(filter(r.match, self.channels))
+    
+#%% AMEGP_OJBECT
+class AMEGP_OBJECT(Data_Interface):
+
+    def __init__(self, path=None, config=None, name=None, comment=None):
+        
+        if name is None:
+            
+            name = Path(path).stem[:-1]
+        
+        super().__init__(path, config=config, name=name, comment=comment)  
+        
+    def __setitem__(self, name, value):
+        
+        self.set_value(name, value)
+        
+    def get_df(self):
+        
+        df = pd.read_xml(self.path)
+        
+        df.set_index('VARNAME', inplace=True)
+                
+        return df.transpose()
+    
+    def set_value(self, name, value):
+        
+        self.df.at['VALUE', name] = value
+        
+        return self
+    
+    def save(self, name=None):
+       
+        name = name if name is not None else self.path
+        
+        with open(self.path, 'r') as fobj:
+        
+            lines = fobj.readlines()
+        
+        newlines = []
+        
+        for l in lines:
+        
+        
+            if re.match(r'^<VARNAME>.+</VARNAME>$', l.strip()):
+                
+                varname, = re.findall(r'^<VARNAME>(.+)</VARNAME>$', l.strip())
+                
+                item = self.df[varname]
+                
+            if re.match(r'^<VALUE>.+</VALUE>$', l.strip()):  
+                
+                str_old, = re.findall(r'^<VALUE>.+</VALUE>$', l.strip())
+
+                str_new = '<VALUE>{}</VALUE>'.format(item['VALUE'])
+                l = l.replace(str_old, str_new, 1)
+                    
+                
+            newlines.append(l)
+            
+        with open(name, 'w') as fobj:
+          
+            fobj.writelines(newlines)
+            
+            
+        return self
+        
 #%% Main Loop
 
 if __name__ == '__main__':
     
     pass
-    

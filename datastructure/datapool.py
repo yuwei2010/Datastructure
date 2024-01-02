@@ -16,6 +16,7 @@ import datetime
 import pandas as pd
 import numpy as np
 import warnings
+import random
 
 import gc
 import traceback
@@ -26,10 +27,11 @@ from tqdm import tqdm
 from itertools import chain
 from functools import reduce, wraps
 
-from .dataobjects import Data_Interface, DATA_OBJECT, \
-                         ASAMMDF_OBJECT, PANDAS_OBJECT, MATLAB_OBJECT
+from .dataobjects import Data_Interface, DATA_OBJECT, AMERES_OBJECT,\
+                         ASAMMDF_OBJECT, PANDAS_OBJECT, MATLAB_OBJECT,\
+                         AMEGP_OBJECT
 
-
+random.seed()
 #%% Collect files
 
 def collect_files(root, *patts, warn_if_double=True, ignore_double=False):
@@ -160,13 +162,15 @@ def combine_configs(*cfgs):
   
 #%% Data Pool
 
-class Data_Pool(object):
+class DataPool(object):
     
     Mapping_Interfaces = {
                          '.csv': PANDAS_OBJECT,
                          '.xlsx': PANDAS_OBJECT,
                          '.mf4': ASAMMDF_OBJECT,
                          '.mat': MATLAB_OBJECT,
+                         '.results': AMERES_OBJECT,
+                         '.amegp': AMEGP_OBJECT,
                      }
     
     def __init__(self, datobjects=None, config=None, interface=None, **kwargs):
@@ -227,8 +231,8 @@ class Data_Pool(object):
             if all(isinstance(s, (str, Path)) for s in datobjects) and all(Path(s).is_dir() for s in datobjects):
                 
                 datobjects = reduce(lambda x, y: 
-                                    Data_Pool(x, config=config, interface=interface, **kwargs)
-                                    +Data_Pool(y, config=config, interface=interface,  **kwargs), datobjects)    
+                                    DataPool(x, config=config, interface=interface, **kwargs)
+                                    +DataPool(y, config=config, interface=interface,  **kwargs), datobjects)    
 
 
         if datobjects is None:
@@ -239,6 +243,10 @@ class Data_Pool(object):
         for obj in datobjects:
             
             if isinstance(obj, Data_Interface):
+                
+                if config:
+                    
+                    obj.config = config
                 
                 objs.append(obj)
                 
@@ -954,6 +962,27 @@ class Data_Pool(object):
             del npz.f
     
             return self
+
+    def split_pool(self, chunk=2, shuffle=True):
+        
+        out = dict()
+        objs = self.objs[:]
+        
+        if shuffle:
+            random.shuffle(objs)
+
+        while objs:
+            
+            for k in range(chunk):
+
+                if not objs: break
+                
+                out.setdefault(k, []).append(objs.pop())
+                
+
+        return [self.__class__(v) for v in out.values()]        
+            
+
     
     def close(self, clean=True, pbar=True):
         
@@ -975,52 +1004,17 @@ class Data_Pool(object):
         
         return None
 
-DataPool = Data_Pool
 
-#%% Data Lake
 
-class Data_Lake(object):
-    
-    
-    def __init__(self, items):
-        
-        
-        self.objs = items
-        
-        
-    def keys(self):
-        
-        zcount = len(str(len(self.objs))) + 1
-        
-        strfmt = f':0{zcount}'
-        
-        
-        fmt = 'DataPool_' + '{' + strfmt + '}'
-                
-        def get():
-            
-            for idx, dp in enumerate(self.objs):
-                
-                if dp.name is None:
-                    
-                    yield fmt.format(idx)
-                else:
-                    
-                    yield dp.name
-                
-        return list(get())
 
-    def search(self, patt, ignore_case=True, raise_error=False):
-                
-        pass
-        
-
-DataLake = Data_Lake
 
 #%% Main Loop
 
 if __name__ == '__main__':
-
+    
+    dp = DataPool(r'C:\95_Programming\10_Data_Related\10_test_files\tushare_csv')
+    
+    print(dp.split_pool())
     
     pass
 
